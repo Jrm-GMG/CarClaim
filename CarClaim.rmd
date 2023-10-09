@@ -1,0 +1,248 @@
+---
+title: "Car insurance  model"
+author: "Jérémy Gamanga"
+output: html_document
+
+---
+
+I study the claim frequency and the claim severity of private motor insurance. The dataset comprises 183,999 observations of automobile insurance policy losses over a one-year period in Norway. I am gonna apply different GLM and select the best one.
+
+Male        ->1 if the policyholder is a male, 0 otherwise. \\
+Young       ->1 if the policyholder age is below 26 years, 0                     otherwise. \\
+
+DistLimit   -> The distance limit as stated in the insurance                        contract:"8000 km", "12000 km", "16000 km", "20000                   km","25000-30000 km", "no limit". \\
+
+GeoRegion   -> Density of the geographical region (from heaviest to                lightest): "High+", "High-","Medium+","Medium-","Low+",               "Low-". \\
+
+Expo        -> Exposure as a fraction of year. \\
+ClaimAmount -> 0 or the average claim amount if NbClaim > 0. \\
+
+NbClaim     -> The claim number. \\
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load data
+```{r cars}
+norauto <- read.csv("norwegianclaim.csv", stringsAsFactors = TRUE)
+ordlevel <- c(paste0("Low", c("-","+")),
+              paste0("Medium", c("-","+")),
+              paste0("High", c("-","+")))
+
+norauto$GeoRegion <- factor(norauto$GeoRegion, rev(ordlevel))
+ordlevel <- c("8000 km", "12000 km","16000 km","20000 km",      
+              "25000-30000 km","no limit")
+
+norauto$DistLimit <- factor(norauto$DistLimit, rev(ordlevel))
+ 
+```
+
+```{R}
+summary(norauto)
+cor(norauto[,-(3:4)]) # remove non-numerical variables
+pairs(norauto[,-(3:4)])
+```
+
+We can see from the correlation matrix that: \newline
+- ClaimAmount and NbClaim are fairly well correlated with each other, with a correlation coefficient of 0.611, which is quite consistent given that the value of ClaimAmount depends on NbClaim. \newline
+- Apart from these two correlated variables, the correlations between the variables are very weak, if not virtually non-existent (correlation coefficient < 0.15), suggesting that the variables are independent of each other.
+
+## Deal with exposure term
+
+To find a good way to deal with exposure, we consider independent Poisson random variables P(ei λ)
+where λ is the unknown parameter and ei is the known exposure length of ith observation.
+
+```{r}
+
+hist(norauto$Expo, xlim=c(0,3), n=100, main="
+Histogram of exposure distribution in our data.", xlab="Exposition" , ylab="Frequency")
+```
+
+We can see that many of the data have exposure durations of less than $1$. This means that the data collected for these observations was gathered over a period shorter than one year. If we don't take this into account, we run the risk of underestimating the number of accidents.  
+
+We then test three ways of integrating this information into our regression.
+
+```{R}
+n <- 500
+ei <- runif(n, 1/2, 1)
+ni <- rpois(n, lambda=1 * ei) #printout with true lambda value
+
+
+f0<- glm(ni ~ 1, family = poisson("log")) # We don't include it in regression
+f1 <- glm(ni ~ 1, weights=ei, family = poisson("log")) # This is done by weighting 
+f2 <- glm(ni ~ 1 + offset(log(ei)), family = poisson("log")) # we do this by imposing the ordinate at the origin 
+
+
+c(exp(coef(f0)), exp(coef(f1)), exp(coef(f2))) #lambda
+
+```
+we can see that f2 gives the right value because we've imposed the y-intercept. This is information we already have, so it's natural to impose it, otherwise the model will try to estimate it, resulting in a loss of accuracy. 
+
+We can see that f1 and f0 give a lower estimate than the real value. Let's see if there's a negative bias. Let's vary $ambda$.
+
+
+```{r}
+library("latex2exp")
+
+coeff_f0 <- c()
+coeff_f1 <- c()
+coeff_f2 <- c()
+lamnda_max <- 50
+
+for (i in 1:lamnda_max)
+{
+  
+  ni <- rpois(n, lambda=i * ei)
+  f0 <- glm(ni ~ 1, family = poisson("log")) # We don't include it in regression
+  f1 <- glm(ni ~ 1, weights=ei, family = poisson("log")) # This is done by weighting 
+  f2 <- glm(ni ~ 1 + offset(log(ei)), family = poisson("log")) # we do this by imposing the ordinate at the origin 
+  
+  print(exp(coef(f0)))
+  coeff_f0 <- append(coeff_f0, (exp(coef(f0))-i))
+  coeff_f1 <- append(coeff_f1, (exp(coef(f1))-i))
+  coeff_f2 <- append(coeff_f2, (exp(coef(f2))-i))
+}
+x <- seq(1,lamnda_max,1)
+plot(x, coeff_f0, col="red", main = TeX(r'(Difference between estimate and the $\lambda$)'), ylab="Difference", xlab=TeX(r'($\lambda$)'))
+lines(x, coeff_f1, col="blue")
+lines(x, coeff_f2,col="green")
+
+```
+
+We can see that the estimated value is always smaller than the actual value. Each time, f1 and f0 underestimate the value of $lambda$. What's more, the absolute difference between the predicted value and the true value increases as the value of $\lambda$ increases. 
+
+The exposure can go above 1. Let's see if this impacts the prediction. 
+
+```{r}
+coeff_f0 <- c()
+coeff_f1 <- c()
+coeff_f2 <- c()
+lamnda_max <- 50
+ei <- runif(n, 1/2, 3)
+
+for (i in 1:lamnda_max)
+{
+  
+  ni <- rpois(n, lambda=i * ei)
+  f0 <- glm(ni ~ 1, family = poisson("log")) # We don't include it in the regression
+  f1 <- glm(ni ~ 1, weights=ei, family = poisson("log")) # This is done by weighting 
+  f2 <- glm(ni ~ 1 + offset(log(ei)), family = poisson("log")) # we do this by imposing the ordinate at the origin 
+  
+  print(exp(coef(f0)))
+  coeff_f0 <- append(coeff_f0, (exp(coef(f0))-i))
+  coeff_f1 <- append(coeff_f1, (exp(coef(f1))-i))
+  coeff_f2 <- append(coeff_f2, (exp(coef(f2))-i))
+}
+x <- seq(1,lamnda_max,1)
+plot(x, coeff_f0, col="red", main = TeX(r'(Difference between estimate and actual $\lambda$)'), ylab="Difference", xlab=TeX(r'($\lambda$)'))
+lines(x, coeff_f1, col="blue")
+lines(x, coeff_f2,col="green")
+
+```
+
+This time, f1 and f0 overestimate $\lambda$. The error is always greater the larger $\lambda$ is. 
+
+## GLM Poisson
+
+```{r}
+pois <- glm(NbClaim ~ Male + Young + DistLimit + GeoRegion  + offset(log(Expo)), data=norauto , family = poisson("log"))
+
+pois <-step(pois, direction="back")
+exp(coef(pois))
+
+summary(pois)
+```
+All p-values are low. Thus, there is no explanatory variable to remove with the Poisson model. 
+
+We can see that the main factors reducing the number of accidents are being in a very sparsely populated region, being male and having a contract coverage of 8000km to 16000km.
+
+Being young is weakly but positively correlated with a higher number of accidents. 
+
+
+```{r}
+tapply(norauto$NbClaim, norauto$DistLimit, mean )
+```
+We can clearly see that for the largest contract coverages, the number of incidents is lower on average. 
+
+## Preduction 
+```{r}
+df1 <- data.frame(Male=1, Young=1, DistLimit="no limit", GeoRegion="Low-", Expo=1)
+predict(pois, newdata = df1, type="response", prec=1)
+```
+Thus, the prediction suggests that, on average, a young man without borderline distance, living in low-density areas makes approximately 0.07 claims in a year.
+
+## GLM gamma
+
+```{r}
+
+norsub <- subset(norauto, NbClaim > 0)
+dim(norsub)
+
+Gamm <- glm(ClaimAmount ~ DistLimit + GeoRegion + Male + Young , data=norsub , family = Gamma("log")) 
+summary(Gamm)
+```
+With a model taking all variables into account, we find that all p-values, with the exception of those for DistLimit20000km and GeoRegionLow- , are greater than 0.1. Thus, the corresponding explanatory variables are not appropriate for this model.  
+
+So the relevant explanatory variables in the generalized linear model, with the explanatory variables following a gamma distribution, are DistLimit20000km and GeoRegionLow-. 
+
+DistLimit20000km is positively correlated with a higher number of accidents. 
+GeoRegionLow- is negatively correlated with a higher number of accidents.
+
+So there's a greater risk of a high number of accidents with contract coverage of less than 20000 km, but a lower risk of a high number of accidents if the contract holder is in a very sparsely populated geographical region. 
+
+We can see that the low density of the geographical area has more influence than the distance of the contract coverage. 
+
+Let's use the $step$ command to select the most relevant explanatory variables.
+
+```{R}
+Gamm_stepped <- step(Gamm, direction="back")
+summary(Gamm_stepped)
+```
+ 
+
+We then find that the most relevant model takes into account the explanatory variables indicating gender and age group. We can therefore see that the gamma distribution model is not appropriate, as the p-values are very high, above 0.2. We can therefore have no confidence in these estimates. 
+
+Furthermore, if we compare the AIC of this model ($186940$) with that of the Poisson model ($66779$), we see that its AIC is much greater. Our Poisson model is therefore of better quality.  
+
+## GLM inverse
+
+Inverse law 
+```{R}
+ig1 <- glm(ClaimAmount ~ Male + Young + DistLimit + GeoRegion , data=norsub , family = inverse.gaussian("log"), start=coef(Gamm), control=list(maxit=100)) 
+
+summary(ig1)
+```
+
+We can see that the $step$ command doesn't work. The algorithm has difficulty calibrating the model under the inverse Gaussian distribution. 
+
+GeoRegionLow- and DistLimit20000km are still the model's two main explanatory variables. 
+This is a poor model, with an AIC of $215195, which is higher than that of the model under the Gamma distribution. 
+This model is therefore of poorer quality than the model under the Gamma distribution and therefore than the model under the Poisson distribution. 
+
+## Model Selection: 
+
+The model with the lowest AIC is the Poisson model. 
+Let's compare the pseudo $R²$ of each model, which should give us the same result:  
+
+For the Poisson model we have $R² \approx 1-\frac{49667}{50453} \approx 0.016$
+For the Gamma model we have $R² \approx 1-\frac{8490}{8508.0} \approx 0.002$.
+For the model with Gaussian inverse we = $R² \approx 1$.
+
+The model with the largest pseudo $R²$ is the Poisson model. 
+
+Thus, the most relevant model is the Poisson model: 
+
+
+$$ln(NbClaim) =
+[Male] \times(-0.54249) + [Young] \times 0.08666 + [DistLimit25000-30000km] \times (-0.18322)
+\\
++ [DistLimit20000km]   \times (-0.31764)   +[DistLimit16000km] \times (-0.51558)   +[DistLimit12000km] \times (-0.62873) 
+\\
++[DistLimit8000km] \times (-0.77440)  +[GeoRegionHigh-] \times (-0.19079)    +[GeoRegionMedium+] \times (-0.23367)  
+\\
++[GeoRegionMedium-] \times (-0.28967)    +[GeoRegionLow+] \times (-0.39916)  +[GeoRegionLow-] \times (-0.52808)  
+\\ +  1\times [Expo] $$ 
+
+With a Poisson noise distribution.
